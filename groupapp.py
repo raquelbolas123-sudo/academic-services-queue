@@ -2,20 +2,19 @@
 """
 Streamlit app for the academic services ticket system.
 
-Interfaces:
+Modes:
 - Student: take a ticket and check ticket status.
-- Staff: call next ticket and see a queue overview.
-- Display: read-only screen with queue information for every service.
+- Staff: call next ticket and see queue overview.
+- Display: read-only screen showing queues for all services.
 
-To run:
+Run locally with:
     streamlit run groupapp.py
 """
 
 import streamlit as st
 from queue_system import create_default_system, get_current_time_info
 
-
-# ----------------- initial setup -----------------
+# ----------- initial setup -----------
 
 if "queue_system" not in st.session_state:
     st.session_state.queue_system = create_default_system()
@@ -32,20 +31,14 @@ st.info(
 st.sidebar.header("Mode")
 mode = st.sidebar.radio("Choose interface", ["Student", "Staff", "Display"])
 
-service_names = queue_system.get_service_names()
-if not service_names:
-    st.error("No services configured.")
-    st.stop()
 
-
-def minutes_to_time_str(total_minutes: int) -> str:
+def minutes_to_time_str(total_minutes):
     return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
 
 
 def open_state_message(service, current_time_min, weekday):
     """
-    Return (is_open, message) with a human-friendly explanation
-    of why the service is open or closed.
+    Return (is_open, message) with explanation.
     """
     time_text = minutes_to_time_str(current_time_min)
 
@@ -53,7 +46,7 @@ def open_state_message(service, current_time_min, weekday):
         msg = f"Services are currently **OPEN** for tickets. (Time now: {time_text})"
         return True, msg
 
-    # Determine reason for being closed
+    # reason for being closed
     if weekday not in service.allowed_weekdays:
         reason = "today is not a scheduled support day."
     elif current_time_min < service.opening_time_min:
@@ -70,34 +63,51 @@ def open_state_message(service, current_time_min, weekday):
     return False, msg
 
 
-# ----------------- STUDENT VIEW -----------------
+# Fixed list of service codes in the order you requested
+SERVICE_CODES = ["AA", "AB", "B", "EA", "EB", "G"]
+
+
+def get_service_display_label(code, service):
+    """Example: 'AA - Academic Services Bachelor Students'."""
+    return f"{code} - {service.description}"
+
+
+def get_all_services_in_order():
+    services = []
+    labels = []
+    for code in SERVICE_CODES:
+        svc = queue_system.get_service(code)
+        if svc is not None:
+            services.append(svc)
+            labels.append(get_service_display_label(code, svc))
+    return services, labels
+
+
+# ------------- STUDENT MODE -------------
 
 if mode == "Student":
     st.header("Student – Take a Ticket")
     st.write("Select what you need from the list of services:")
 
-    student_service_name = st.selectbox(
-        "Service", service_names, key="student_service_select"
+    services_list, labels_list = get_all_services_in_order()
+
+    service_label = st.selectbox(
+        "Service",
+        labels_list,
+        key="student_service_select",
     )
-    service = queue_system.get_service(student_service_name)
+    index = labels_list.index(service_label)
+    service = services_list[index]
 
     current_time_min, weekday = get_current_time_info()
     is_open_now, status_message = open_state_message(
         service, current_time_min, weekday
     )
 
-    # Green (success) if open, red (error) if closed
     if is_open_now:
         st.success(status_message)
     else:
         st.error(status_message)
-
-    st.write(
-        f"Opening hours for {service.name}: "
-        f"Monday, Wednesday and Friday – "
-        f"{minutes_to_time_str(service.opening_time_min)}–"
-        f"{minutes_to_time_str(service.closing_time_min)}"
-    )
 
     st.write("")
 
@@ -116,20 +126,33 @@ if mode == "Student":
             st.write(f"People ahead of you: **{people_ahead}**")
             st.write(f"Estimated waiting time: **{estimated_wait} minutes**")
             st.info(
-                "The waiting time is an estimate based on average service time "
-                "and the number of staff members (three counters working in "
-                "parallel)."
+                "Note: waiting time is an estimate based on the average "
+                "service time and three staff members working in parallel."
             )
-    else:
-        st.warning("You cannot take a ticket because the service is closed.")
 
-    # -------- Student – Check my ticket --------
+    # ---- Check my ticket ----
 
     st.markdown("---")
     st.header("Student – Check my ticket")
-    st.write("Enter your ticket number (e.g. 1, 2, 3…).")
+    st.write(
+        "Select the service of your ticket and enter your ticket number "
+        "(just the number, for example **1** for ticket **AA-001**)."
+    )
 
-    ticket_input = st.text_input("Ticket number", key="ticket_check_input")
+    services_check, labels_check = get_all_services_in_order()
+
+    service_label_check = st.selectbox(
+        "Service of your ticket",
+        labels_check,
+        key="check_service_select",
+    )
+    idx_check = labels_check.index(service_label_check)
+    service_check = services_check[idx_check]
+
+    ticket_input = st.text_input(
+        "Ticket number (only the digits, e.g. 1, 2, 3…)",
+        key="ticket_check_input",
+    )
 
     if st.button("Check ticket status"):
         if not ticket_input.strip():
@@ -140,41 +163,48 @@ if mode == "Student":
             except ValueError:
                 st.error("Ticket number must be a whole number, e.g. 1 or 2.")
             else:
-                status, info = service.find_ticket_status(ticket_number)
+                status, info = service_check.find_ticket_status(ticket_number)
+
+                code = service_check.code
+                label_example = f"{code}-{ticket_number:03d}"
 
                 if status == "serving":
                     st.success(
-                        f"✅ Ticket {service.name}-{ticket_number} is "
+                        f"✅ Ticket **{label_example}** is "
                         f"**being served now**."
                     )
                 elif status == "waiting":
                     people_ahead, est_wait = info
                     st.info(
-                        f"Ticket {service.name}-{ticket_number} is "
-                        f"**waiting** in the queue.\n\n"
+                        f"Ticket **{label_example}** is **waiting** in the queue.\n\n"
                         f"People ahead of you: **{people_ahead}**\n\n"
                         f"Estimated waiting time: **{est_wait} minutes**"
                     )
                 elif status == "done":
                     st.info(
-                        f"Ticket {service.name}-{ticket_number} has "
-                        f"**already been served**."
+                        f"Ticket **{label_example}** has **already been served**."
                     )
                 else:
                     st.error(
-                        "Ticket not found. It may have been served already, "
-                        "or it belongs to another service or day."
+                        "Ticket not found in this service. "
+                        "Please check that you selected the correct service "
+                        "and entered the right number."
                     )
 
-# ----------------- STAFF VIEW -----------------
+# ------------- STAFF MODE -------------
 
 elif mode == "Staff":
     st.header("Staff – Call Next Ticket")
 
-    staff_service_name = st.selectbox(
-        "Service", service_names, key="staff_service_select"
+    services_list, labels_list = get_all_services_in_order()
+
+    service_label = st.selectbox(
+        "Service",
+        labels_list,
+        key="staff_service_select",
     )
-    service = queue_system.get_service(staff_service_name)
+    index = labels_list.index(service_label)
+    service = services_list[index]
 
     current_time_min, weekday = get_current_time_info()
     is_open_now, status_message = open_state_message(
@@ -200,25 +230,26 @@ elif mode == "Staff":
         else:
             st.success(f"Now serving: **{next_ticket.label()}**")
 
-    # -------- Queue overview --------
-
+    # Queue overview
     st.markdown("---")
     st.subheader("Queue overview")
 
     total_tickets = sum(
-        s.people_waiting() for s in queue_system.services.values()
+        svc.people_waiting() for svc in queue_system.services.values()
     )
-    st.write(f"Tickets in queue: **{total_tickets or 'none'}**")
+    st.write(f"Tickets in queue (all services): **{total_tickets or 'none'}**")
 
     services_with_queue = [
-        sname for sname, s in queue_system.services.items() if s.people_waiting() > 0
+        f"{code} ({svc.people_waiting()} waiting)"
+        for code, svc in queue_system.services.items()
+        if svc.people_waiting() > 0
     ]
     if services_with_queue:
-        st.write("Their services: " + ", ".join(services_with_queue))
+        st.write("Queues with waiting tickets: " + ", ".join(services_with_queue))
     else:
-        st.write("Their services: none")
+        st.write("All queues are empty at the moment.")
 
-# ----------------- DISPLAY VIEW -----------------
+# ------------- DISPLAY MODE -------------
 
 elif mode == "Display":
     st.header("Queue Display")
@@ -229,31 +260,33 @@ elif mode == "Display":
 
     st.markdown("---")
 
-    # For each service, show open/closed, current ticket and queue length
-    for service_name in service_names:
-        service = queue_system.get_service(service_name)
+    # Show all queues in fixed order
+    for code in SERVICE_CODES:
+        svc = queue_system.get_service(code)
+        if svc is None:
+            continue
 
         is_open_now, status_message = open_state_message(
-            service, current_time_min, weekday
+            svc, current_time_min, weekday
         )
 
-        st.subheader(service.name)
+        st.subheader(get_service_display_label(code, svc))
 
         if is_open_now:
             st.success(status_message)
         else:
             st.error(status_message)
 
-        if service.current_ticket is not None:
-            st.write(f"Now serving: **{service.current_ticket.label()}**")
+        if svc.current_ticket is not None:
+            st.write(f"Now serving: **{svc.current_ticket.label()}**")
         else:
             st.write("No ticket is currently being served.")
 
-        waiting = service.people_waiting()
+        waiting = svc.people_waiting()
         st.write(f"People waiting in this queue: **{waiting}**")
 
         if waiting > 0:
-            labels = [ticket.label() for ticket in service.queue]
+            labels = [ticket.label() for ticket in svc.queue]
             st.write("Next tickets: " + ", ".join(labels))
         else:
             st.write("Next tickets: none")
